@@ -1,30 +1,49 @@
 <script lang="ts">
 import config from '@config'
-import { get, pick } from 'lodash-es'
+import { get } from 'lodash-es'
 import { computed, defineComponent, onMounted, onBeforeUnmount, ref, watch, nextTick } from 'vue'
-import { animationBoxData, animationEl, isMountedCount } from '../floating'
+import { animationBoxData, animationEl } from '../floating'
 import type { Ref, StyleValue } from 'vue'
-
-type Rect = Pick<DOMRect, 'width' | 'height' | 'top' | 'left'>
 
 export default defineComponent({
   name: 'LogoAnimation',
   setup() {
     const logo: Ref<string> = get(config, 'logo')
-    const proxyRect: Ref<Rect | undefined> = ref()
+    const proxyRect: Ref<DOMRect | undefined> = ref()
     const floatingState: Ref<boolean> = ref<boolean>(false)
 
     watch(animationEl, async (newEl) => {
       if (!newEl) return
-      const newClientRect = newEl.getBoundingClientRect()
-      isMountedCount.value > 1 && (floatingState.value = true)
-      proxyRect.value = {
-        ...pick(newClientRect, 'width', 'height', 'left'),
-        // when routing changes, vue router `scrollBehavior` takes effect
-        // after the component is rendered,
-        // we need to correct to `top` when the page has a scroll distance.
-        top: newClientRect.top + (newEl.dataset.fixed === 'true' ? 0 : window.scrollY)
+      floatingState.value = true
+      await new Promise(resolve => window.requestAnimationFrame(resolve))
+
+      const handler = () => {
+        const newRect = newEl.getBoundingClientRect()
+        if (
+          !proxyRect.value ||
+          (
+            newRect.top === proxyRect.value.top
+            && newRect.left === proxyRect.value.left
+            && newRect.width === proxyRect.value.width
+            && newRect.height === proxyRect.value.height
+          )
+        ) {
+          floatingState.value = false
+        }
+        proxyRect.value = newRect
       }
+
+      window.addEventListener('scroll', handler)
+
+      const unwatch = watch(floatingState, state => {
+        if (!state) {
+          console.log('unwatch')
+          window.removeEventListener('scroll', handler)
+          unwatch()
+        }
+      })
+
+      handler()
     })
 
     const styles: Ref<StyleValue | undefined> = computed(() => ({
@@ -56,8 +75,8 @@ export default defineComponent({
       }
       clearTimeout(resetTimer)
       resetTimer = window.setTimeout(() => {
-        const newBRect = animationEl.value?.getBoundingClientRect()
-        if (newBRect) proxyRect.value = pick(newBRect, 'width', 'height', 'left', 'top')
+        const newRect = animationEl.value?.getBoundingClientRect()
+        if (newRect) proxyRect.value = newRect
       }, 200)
     }
 
@@ -76,25 +95,16 @@ export default defineComponent({
 <template>
   <Teleport :to="animationEl || 'body'">
     <img 
-      v-if="logo && animationEl"
+      v-if="logo"
       v-bind="animationBoxData.attrs" 
-      :class="{ 'varlet-cli-logo-position': !animationEl, 'varlet-cli-logo-show': !floatingState }" 
+      :class="{ 'varlet-cli-logo-position': floatingState }" 
       :style="styles" 
       :src="logo" 
       class="varlet-cli-logo-entity"
       alt="logo" 
+      @transitionend="land"
     />
   </Teleport>
-  <img 
-    v-if="logo && animationEl"
-    v-bind="animationBoxData.attrs" 
-    :class="{ 'varlet-cli-logo-show': floatingState }" 
-    :style="styles" 
-    :src="logo" 
-    @transitionend="land" 
-    class="varlet-cli-logo-entity varlet-cli-logo-position varlet-cli-logo-transition"
-    alt="logo"
-  />
 </template>
 
 <style lang="less">
@@ -106,16 +116,15 @@ export default defineComponent({
 .varlet-cli-logo-entity {
   z-index: 10;
   pointer-events: none;
-  opacity: 0;
+}
+
+body > .varlet-cli-logo-entity {
+  visibility: hidden;
 }
 
 .varlet-cli-logo-position {
   position: fixed;
   transition: 0.5s ease-in-out;
   transition-property: left, top, height, width;
-}
-
-.varlet-cli-logo-show {
-  opacity: 1;
 }
 </style>
